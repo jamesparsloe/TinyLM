@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinylm"
+
+version = "0.1.0"
+
+description = ""
+
+requires-python = ">=3.11"
+
+dependencies = [
+    "click",
+    "einops",
+    "ipykernel",
+    "matplotlib",
+    "numpy",
+    "pydantic",
+    "torch",
+    "torchaudio",
+    "torchdata",
+    "torchdiffeq",
+    "transformers",
+    "wandb",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pre-commit",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tinylm.__version__" }
