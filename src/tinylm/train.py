@@ -84,6 +84,7 @@ class TrainConfig(BaseModel):
 
     log_every: int = 10
     checkpoint_every: int = 1_000
+    val_every: int = 1_000
 
     compile: bool = True
 
@@ -172,12 +173,23 @@ def main(config_path: str, edit: bool):
         TinyLMDataset(ds["train"], max_seqlen=model_config.max_seqlen),
         TinyLMDataset(ds["validation"], max_seqlen=model_config.max_seqlen),
     )
+
+    collate_fn = functools.partial(collate, pad_token_id=model_config.pad_token_id)
+
     train_dl = DataLoader(
         train_ds,
         batch_size=train_config.micro_batch_size,
         shuffle=True,
         drop_last=True,
-        collate_fn=functools.partial(collate, pad_token_id=model_config.pad_token_id),
+        collate_fn=collate_fn,
+    )
+
+    val_dl = DataLoader(
+        val_ds,
+        batch_size=train_config.micro_batch_size,
+        shuffle=False,
+        drop_last=True,
+        collate_fn=collate_fn,
     )
 
     train_dl_iter = cycle(train_dl)
@@ -250,6 +262,36 @@ def main(config_path: str, edit: bool):
                 step=step,
             )
             t1 = t2
+
+        if step % train_config.val_every == 0:
+            print(f"Starting val")
+            model.eval()
+
+            val_loss = 0.0
+            n_val_batches = 0
+
+            with torch.no_grad():
+                for token_ids in val_dl:
+                    val_input_ids, val_target_ids = (
+                        token_ids[:, :-1],
+                        token_ids[:, 1:].contiguous(),
+                    )
+                    val_input_ids, val_target_ids = (
+                        val_input_ids.to(device, non_blocking=True),
+                        val_target_ids.to(device, non_blocking=True),
+                    )
+
+                    with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=amp_enabled):
+                        loss = model(val_input_ids, target_ids=val_target_ids)
+
+                    val_loss += loss.item()
+                    n_val_batches += 1
+
+            val_loss /= n_val_batches
+
+            wandb.log({"val/loss": val_loss}, step=step)
+
+            model.train()
 
         if step % train_config.checkpoint_every == 0:
             state_dict = (
