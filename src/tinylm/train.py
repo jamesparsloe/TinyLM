@@ -132,7 +132,7 @@ def decompile_state_dict(state_dict):
 
 @click.command()
 @click.argument("config_path", type=click.Path(exists=True))
-@click.command("--edit", is_flag=True)
+@click.option("--edit", is_flag=True)
 def main(config_path: str, edit: bool):
     name = "TinyLM"
 
