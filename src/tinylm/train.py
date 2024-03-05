@@ -193,8 +193,8 @@ def main(config_path: str):
     get_lr = functools.partial(
         warmup_then_cosine_decay,
         steps=train_config.total_steps,
-        min_lr=train_config.lr,
-        max_lr=train_config.start_lr,
+        min_lr=train_config.start_lr,
+        max_lr=train_config.lr,
         warmup_steps=train_config.warmup_steps,
     )
 
