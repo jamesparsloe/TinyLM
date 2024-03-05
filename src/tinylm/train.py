@@ -72,8 +72,8 @@ def build_optimizer(
 
 class TrainConfig(BaseModel):
     seed: int = 42
-    batch_size: int = 256
-    micro_batch_size: int = 32
+    batch_size: int = 2048
+    micro_batch_size: int = 128
     total_steps: int = 10_000
     warmup_steps: int = 100
     start_lr: float = 3e-5
@@ -83,7 +83,7 @@ class TrainConfig(BaseModel):
     grad_clip: float = 1.0
 
     log_every: int = 10
-    checkpoint_every: int = 500
+    checkpoint_every: int = 1_000
 
     compile: bool = True
 
@@ -188,8 +188,8 @@ def main(config_path: str, edit: bool):
     step = 0
 
     def next_batch():
-        input_ids = next(train_dl_iter)
-        input_ids, target_ids = input_ids[:, :-1], input_ids[:, 1:].contiguous()
+        token_ids = next(train_dl_iter)
+        input_ids, target_ids = token_ids[:, :-1], token_ids[:, 1:].contiguous()
         input_ids, target_ids = (
             input_ids.to(device, non_blocking=True),
             target_ids.to(device, non_blocking=True),
@@ -203,6 +203,8 @@ def main(config_path: str, edit: bool):
         max_lr=train_config.lr,
         warmup_steps=train_config.warmup_steps,
     )
+
+    tokenizer = Utf8Tokenizer()
 
     input_ids, target_ids = next_batch()
 

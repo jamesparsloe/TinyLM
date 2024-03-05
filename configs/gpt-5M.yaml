@@ -1,3 +1,2 @@
 model:
   kind: gpt
-  dropout: 0.1

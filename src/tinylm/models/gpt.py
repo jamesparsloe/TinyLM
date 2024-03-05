@@ -11,16 +11,17 @@ from torch import Tensor
 
 class GPTConfig(BaseModel):
     kind: Literal["gpt"]
+    tokenizer: str = "utf8"
     vocab_size: int = 256 + 3
     d_model: int = 256
     n_heads: int = 8
     n_layers: int = 6
     bias: bool = False
-    dropout: float = 0.0
+    dropout: float = 0.1
     pad_token_id: int = 0
     bos_token_id: int = 1
     eos_token_id: int = 2
-    max_seqlen: int = 4096
+    max_seqlen: int = 2048
     pad_vocab_size_multiple: int = 8
     amp_dtype: str = "bfloat16"
 
@@ -52,7 +53,7 @@ class MHA(nn.Module):
         q, k, v = qkv.unbind(dim=1)
 
         out = F.scaled_dot_product_attention(
-            q, k, v, dropout_p=self.dropout if self.training else 0.0, is_causal=False
+            q, k, v, dropout_p=self.dropout if self.training else 0.0, is_causal=True
         )
 
         out = self.out_proj(rearrange(out, "... h T d -> ... T (h d)"))
@@ -231,18 +232,31 @@ class GPT(nn.Module):
             return loss
 
     @torch.inference_mode()
-    def generate(self, input_ids: Tensor, max_seqlen: int, top_k: int | None):
+    def generate(
+        self,
+        input_ids: Tensor,
+        max_seqlen: int,
+        top_k: int | None = None,
+        temperature: float = 1.0,
+    ):
         device = input_ids.device
         B, T = input_ids.size()
 
         while T < max_seqlen:
             logits = self(input_ids)
 
+            logits = logits[:, -1]
+
             if top_k is not None:
                 v, _ = torch.topk(logits, top_k)
                 logits[logits < v[:, [-1]]] = -float("inf")
+                probs = F.softmax(logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
             else:
-                next_token = logits[:, -1].argmax(-1, keepdim=True)
+                next_token = logits.argmax(-1, keepdim=True)
+
+            if next_token.item() == self.config.eos_token_id:
+                break
 
             input_ids = torch.cat((input_ids, next_token), dim=-1)
             T += 1
