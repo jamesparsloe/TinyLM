@@ -226,7 +226,7 @@ class GPT(nn.Module):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 target_ids.view(-1),
-                ignore_index=self.emb.padding_idx,
+                ignore_index=self.config.pad_token_id,
             )
             return loss
 
