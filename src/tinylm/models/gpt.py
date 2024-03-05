@@ -1,11 +1,12 @@
-import torch
-from torch import Tensor
-import torch.nn as nn
-from pydantic import BaseModel
-from einops import rearrange
-import torch.nn.functional as F
-from typing import Literal
 import math
+from typing import Literal
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+from pydantic import BaseModel
+from torch import Tensor
 
 
 class GPTConfig(BaseModel):

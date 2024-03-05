@@ -1,19 +1,22 @@
-import click
-import yaml
-from pydantic import BaseModel, Field
-from tinylm.models import GPTConfig, GPT
-from datasets import load_dataset
-from torch.utils.data import DataLoader, Dataset
-from .tokenizers import Utf8Tokenizer
 import functools
-import torch
-import torch.nn as nn
-import wandb
-import random
-import numpy as np
 import math
 import os
+import random
 import time
+
+import click
+import numpy as np
+import torch
+import torch.nn as nn
+import yaml
+from datasets import load_dataset
+from pydantic import BaseModel, Field
+from torch.utils.data import DataLoader, Dataset
+
+import wandb
+from tinylm.models import GPT, GPTConfig
+
+from .tokenizers import Utf8Tokenizer
 
 ModelConfig = GPTConfig
 
@@ -71,8 +74,8 @@ class TrainConfig(BaseModel):
     seed: int = 42
     batch_size: int = 256
     micro_batch_size: int = 32
-    total_steps: int = 1_000_000
-    warmup_steps: int = 10_000
+    total_steps: int = 10_000
+    warmup_steps: int = 100
     start_lr: float = 3e-5
     lr: float = 3e-4
     weight_decay: float = 0.1
@@ -159,9 +162,10 @@ def main(config_path: str):
     print(f"{n_params / 1e6:.2f}M parameters")
 
     ds = load_dataset("roneneldan/TinyStories")
-    train_ds, val_ds = TinyLMDataset(
-        ds["train"], max_seqlen=model_config.max_seqlen
-    ), TinyLMDataset(ds["validation"], max_seqlen=model_config.max_seqlen)
+    train_ds, val_ds = (
+        TinyLMDataset(ds["train"], max_seqlen=model_config.max_seqlen),
+        TinyLMDataset(ds["validation"], max_seqlen=model_config.max_seqlen),
+    )
     train_dl = DataLoader(
         train_ds,
         batch_size=train_config.micro_batch_size,
@@ -180,8 +184,9 @@ def main(config_path: str):
     def next_batch():
         input_ids = next(train_dl_iter)
         input_ids, target_ids = input_ids[:, :-1], input_ids[:, 1:].contiguous()
-        input_ids, target_ids = input_ids.to(device, non_blocking=True), target_ids.to(
-            device, non_blocking=True
+        input_ids, target_ids = (
+            input_ids.to(device, non_blocking=True),
+            target_ids.to(device, non_blocking=True),
         )
         return input_ids, target_ids
 
@@ -239,7 +244,6 @@ def main(config_path: str):
             t1 = t2
 
         if step % train_config.checkpoint_every == 0:
-
             state_dict = (
                 decompile_state_dict(model.state_dict())
                 if train_config.compile
