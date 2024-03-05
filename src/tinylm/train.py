@@ -204,7 +204,7 @@ def main(config_path: str, edit: bool):
         warmup_steps=train_config.warmup_steps,
     )
 
-    tokenizer = Utf8Tokenizer()
+    gradient_accumulation_steps = train_config.gradient_accumulation_steps
 
     input_ids, target_ids = next_batch()
 
@@ -221,10 +221,10 @@ def main(config_path: str, edit: bool):
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        for micro_step in range(train_config.gradient_accumulation_steps):
+        for micro_step in range(gradient_accumulation_steps):
             with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=amp_enabled):
                 loss = model(input_ids, target_ids=target_ids)
-                loss = loss / train_config.gradient_accumulation_steps
+                loss = loss / gradient_accumulation_steps
                 loss.backward()
 
             input_ids, target_ids = next_batch()
@@ -242,7 +242,7 @@ def main(config_path: str, edit: bool):
             throughput = train_config.log_every * train_config.batch_size / (t2 - t1)
             wandb.log(
                 {
-                    "train/loss": loss.item(),
+                    "train/loss": gradient_accumulation_steps * loss.item(),
                     "train/grad_norm": grad_norm.item(),
                     "train/throughput": throughput,
                     "train/lr": lr,
