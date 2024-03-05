@@ -12,7 +12,7 @@ from torch import Tensor
 class GPTConfig(BaseModel):
     kind: Literal["gpt"]
     vocab_size: int = 256 + 3
-    d_model: int = 512
+    d_model: int = 256
     n_heads: int = 8
     n_layers: int = 6
     bias: bool = False
@@ -167,8 +167,9 @@ class GPT(nn.Module):
                 vocab_size % config.pad_vocab_size_multiple
             )
 
-        self.emb = nn.Embedding(
-            vocab_size, config.d_model, padding_idx=config.pad_token_id
+        self.emb = nn.Sequential(
+            nn.Embedding(vocab_size, config.d_model, padding_idx=config.pad_token_id),
+            nn.Dropout(config.dropout),
         )
         self.pos_emb = nn.Embedding(config.max_seqlen, config.d_model)
         self.decoder = Decoder(

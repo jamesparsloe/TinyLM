@@ -83,7 +83,7 @@ class TrainConfig(BaseModel):
     grad_clip: float = 1.0
 
     log_every: int = 10
-    checkpoint_every: int = 10_000
+    checkpoint_every: int = 500
 
     compile: bool = True
 
@@ -132,11 +132,17 @@ def decompile_state_dict(state_dict):
 
 @click.command()
 @click.argument("config_path", type=click.Path(exists=True))
-def main(config_path: str):
+@click.command("--edit", is_flag=True)
+def main(config_path: str, edit: bool):
     name = "TinyLM"
 
     with open(config_path, "r") as f:
-        config = Config(**yaml.safe_load(f))
+        s = f.read()
+
+    if edit:
+        s = click.edit(s)
+
+    config = Config(**yaml.safe_load(s))
 
     device = "cuda"
 
@@ -219,7 +225,7 @@ def main(config_path: str):
                 loss = loss / train_config.gradient_accumulation_steps
                 loss.backward()
 
-                input_ids, target_ids = next_batch()
+            input_ids, target_ids = next_batch()
 
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), train_config.grad_clip
