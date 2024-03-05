@@ -1,0 +1,9 @@
+model:
+  kind: gpt
+  d_model: 384
+  n_heads: 12
+  n_layers: 9
+  dropout: 0.1
+
+train:
+  micro_batch_size: 64
