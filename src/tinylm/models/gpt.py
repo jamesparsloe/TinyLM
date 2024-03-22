@@ -24,6 +24,7 @@ class GPTConfig(BaseModel):
     max_seqlen: int = 2048
     pad_vocab_size_multiple: int = 8
     amp_dtype: str = "bfloat16"
+    use_flash_attn: bool = True
 
 
 class MHA(nn.Module):
@@ -34,34 +35,61 @@ class MHA(nn.Module):
         n_heads: int,
         bias: bool,
         dropout: float,
+        use_flash_attn: bool = True,
+        max_seqlen: int = 2048,
     ):
         super().__init__()
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
         self.dropout = dropout
+        self.use_flash_attn = use_flash_attn
+        self.max_seqlen = max_seqlen
 
         self.Wqkv = nn.Linear(d_model, 3 * d_model, bias=bias)
-
         self.out_proj = nn.Sequential(
             nn.Linear(d_model, d_model, bias=bias), nn.Dropout(dropout)
         )
 
+        if not self.use_flash_attn:
+            self.register_buffer(
+                "causal_mask",
+                torch.tril(torch.ones(max_seqlen, max_seqlen)).view(
+                    1, 1, max_seqlen, max_seqlen
+                ),
+                persistent=False,
+            )
+
     def forward(self, x: Tensor):
+        B, T, d = x.size()
         qkv = self.Wqkv(x)
 
         qkv = rearrange(qkv, "B T (three h d) -> B three h T d", three=3, d=self.d_head)
         q, k, v = qkv.unbind(dim=1)
 
-        out = F.scaled_dot_product_attention(
-            q, k, v, dropout_p=self.dropout if self.training else 0.0, is_causal=True
-        )
+        attn_weights = None
+
+        if self.use_flash_attn:
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            attn_weights = q @ k.transpose(-2, -1) / math.sqrt(self.d_head)
+            attn_weights = attn_weights.masked_fill(
+                self.causal_mask[:, :, :T, :T] == 0, -float("inf")
+            )
+            attn_weights = F.softmax(attn_weights, dim=-1)
+            out = attn_weights @ v
 
         out = self.out_proj(rearrange(out, "... h T d -> ... T (h d)"))
 
-        return out
+        return out, attn_weights
 
 
-class RMSNorm(torch.nn.Module):
+class RMSNorm(nn.Module):
     def __init__(self, d: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
@@ -101,6 +129,7 @@ class Block(nn.Module):
         n_heads: int,
         bias: bool,
         dropout: float,
+        use_flash_attn: bool,
     ):
         super().__init__()
 
@@ -110,16 +139,19 @@ class Block(nn.Module):
             n_heads=n_heads,
             bias=bias,
             dropout=dropout,
+            use_flash_attn=use_flash_attn,
         )
 
         self.mlp_norm = nn.LayerNorm(d_model)
         self.mlp = MLP(d_model)
 
     def forward(self, x: Tensor):
-        x = x + self.attn(self.attn_norm(x))
+        attn_out, attn_weights = self.attn(self.attn_norm(x))
+
+        x = x + attn_out
         x = x + self.mlp(self.mlp_norm(x))
 
-        return x
+        return x, attn_weights
 
 
 class Decoder(nn.Module):
@@ -131,6 +163,7 @@ class Decoder(nn.Module):
         n_layers: int,
         bias: bool,
         dropout: float,
+        use_flash_attn: bool,
     ):
         super().__init__()
 
@@ -141,6 +174,7 @@ class Decoder(nn.Module):
                     n_heads=n_heads,
                     bias=bias,
                     dropout=dropout,
+                    use_flash_attn=use_flash_attn,
                 )
                 for _ in range(n_layers)
             ]
@@ -148,11 +182,18 @@ class Decoder(nn.Module):
 
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, need_weights: bool = False):
+        all_attn_weights = []
         for block in self.blocks:
-            x = block(x)
+            x, attn_weights = block(x)
+            all_attn_weights.append(attn_weights)
 
-        return self.norm(x)
+        if need_weights:
+            all_attn_weights = torch.concat(all_attn_weights, dim=0)
+        else:
+            all_attn_weights = None
+
+        return self.norm(x), all_attn_weights
 
 
 class GPT(nn.Module):
@@ -179,6 +220,7 @@ class GPT(nn.Module):
             n_layers=config.n_layers,
             bias=config.bias,
             dropout=config.dropout,
+            use_flash_attn=config.use_flash_attn,
         )
 
         self.lm_head = nn.Linear(config.d_model, vocab_size, bias=config.bias)
@@ -204,6 +246,7 @@ class GPT(nn.Module):
         input_ids: Tensor,
         position_ids: Tensor | None = None,
         target_ids: Tensor | None = None,
+        need_weights: bool = False,
     ):
         device = input_ids.device
         B, T = input_ids.size()
@@ -217,12 +260,15 @@ class GPT(nn.Module):
 
         emb = emb + pos_emb
 
-        out = self.decoder(emb)
+        out, attn_weights = self.decoder(emb, need_weights=need_weights)
 
         logits = self.lm_head(out)
 
         if target_ids is None:
-            return logits
+            return {
+                "logits": logits,
+                "attn_weights": attn_weights,
+            }
         else:
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
@@ -238,12 +284,17 @@ class GPT(nn.Module):
         max_seqlen: int,
         top_k: int | None = None,
         temperature: float = 1.0,
+        need_weights: bool = False,
     ):
         device = input_ids.device
         B, T = input_ids.size()
 
+        attn_weights = None
+
         while T < max_seqlen:
-            logits = self(input_ids)
+            out = self(input_ids, need_weights=need_weights)
+            logits = out["logits"]
+            attn_weights = out["attn_weights"]
 
             logits = logits[:, -1]
 
@@ -261,7 +312,10 @@ class GPT(nn.Module):
             input_ids = torch.cat((input_ids, next_token), dim=-1)
             T += 1
 
-        return input_ids
+        return {
+            "token_ids": input_ids,
+            "attn_weights": attn_weights,
+        }
 
 
 if __name__ == "__main__":

@@ -2,10 +2,12 @@ import torch
 from tinylm.tokenizers import Utf8Tokenizer
 from tinylm.train import seed_all
 import click
+from tinylm import viz
+import os
 
 
 @click.command()
-@click.option("--checkpoint-path", default="./runs/o8yiogr5/TinyLM-010000.pt")
+@click.option("--checkpoint-path", default="./runs/4ccbskk7/TinyLM-010000.pt")
 @click.option("--prompt", default="A long time ago ")
 @click.option("--top-k", type=int, default=256)
 @click.option("--temperature", type=float, default=1.0)
@@ -27,6 +29,9 @@ def main(
 
     config = checkpoint["config"]
     model_config = config["model"]
+
+    # use PyTorch impl to materialize the attention weights
+    model_config["use_flash_attn"] = False
 
     kind = model_config["kind"]
 
@@ -51,12 +56,24 @@ def main(
     # input_ids = torch.tensor([[tokenizer.bos_token_id]], device="cuda")
 
     with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
-        token_ids = model.generate(
+        out = model.generate(
             input_ids,
             max_seqlen=max_seqlen or model_config.max_seqlen,
             top_k=top_k,
             temperature=temperature,
+            need_weights=True,
         )
+
+    token_ids = out["token_ids"]
+    attn_weights = out["attn_weights"]
+
+    run_id = checkpoint_path.split("/")[-2]
+    os.makedirs("./viz", exist_ok=True)
+    viz_path = f"./viz/{run_id}-{kind}-{step:06d}-attn.png"
+    viz.plot_attn(
+        attn_weights,
+        viz_path,
+    )
 
     generated = tokenizer.decode(token_ids.cpu().tolist())
 
