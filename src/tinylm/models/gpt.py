@@ -10,7 +10,7 @@ from torch import Tensor
 
 
 class GPTConfig(BaseModel):
-    kind: Literal["gpt"]
+    kind: Literal["gpt"] = "gpt"
     tokenizer: str = "utf8"
     vocab_size: int = 256 + 3
     d_model: int = 256
@@ -25,6 +25,10 @@ class GPTConfig(BaseModel):
     pad_vocab_size_multiple: int = 8
     amp_dtype: str = "bfloat16"
     use_flash_attn: bool = True
+
+    # just train the affine transformations in the LayerNorms
+    # inspiration from https://arxiv.org/abs/2003.00152 Training BatchNorm and Only BatchNorm
+    only_train_norms: bool = False
 
 
 class MHA(nn.Module):
@@ -233,6 +237,13 @@ class GPT(nn.Module):
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
 
+        if config.only_train_norms:
+            for n, p in self.named_parameters():
+                if "norm" in n:
+                    p.requires_grad = True
+                else:
+                    p.requires_grad = False
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -343,6 +354,9 @@ if __name__ == "__main__":
     )
 
     model = GPT(config).to(device)
+
+    for n, p in model.named_parameters():
+        print(n)
 
     enabled = config.amp_dtype == "bfloat16"
     dtype = torch.bfloat16 if enabled else torch.float32
